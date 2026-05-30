@@ -59,3 +59,28 @@ aws-real-time-analytics-project/
 ├── .gitignore
 ├── requirements.txt
 └── README.md
+```
+## Streaming Optimization
+
+The initial ingestion pipeline stored every incoming AIS event as an individual JSON object in Amazon S3.
+
+During testing, this approach quickly generated thousands of very small files within a short period of time. This pattern can lead to several performance and scalability issues in cloud-based data lake architectures, including:
+
+* Increased S3 PUT request overhead
+* Poor Athena query performance
+* Higher metadata and crawler overhead
+* Small-files problem in distributed analytics systems
+
+To improve scalability and storage efficiency, the ingestion logic was redesigned to use buffered event batching.
+
+The updated ingestion pipeline now:
+
+* Buffers incoming AIS events in memory
+* Groups events into batches of 100 records
+* Stores batched data as JSONL files in Amazon S3
+* Uses time-based partitioning (`year/month/day/hour`)
+
+This design significantly reduces the number of S3 objects while improving downstream analytics performance and reducing operational overhead.
+
+The ingestion pipeline now behaves more closely to a production-grade real-time streaming architecture.
+
