@@ -33,7 +33,8 @@ SUBSCRIPTION_MESSAGE = {
             [50.0, 22.0],
             [60.0, 30.0]
         ]
-    ]
+    ],
+    "FilterMessageTypes": ["PositionReport"]
 }
 
 
@@ -74,7 +75,8 @@ def flush_buffer_to_s3() -> None:
 
 def on_open(ws):
     print("Connected to AISStream")
-    print("Sending subscription message")
+    print("Sending subscription message:")
+    print(json.dumps(SUBSCRIPTION_MESSAGE, indent=2))
     ws.send(json.dumps(SUBSCRIPTION_MESSAGE))
     print("Subscription message sent")
 
@@ -84,17 +86,29 @@ def on_message(ws, message):
 
     try:
         data = json.loads(message)
-        event_buffer.append(data)
 
-        metadata = data.get("MetaData", {})
         message_type = data.get("MessageType", "Unknown")
+        metadata = data.get("MetaData", {})
+        position_report = data.get("Message", {}).get("PositionReport", {})
 
         ship_name = metadata.get("ShipName", "Unknown")
         mmsi = metadata.get("MMSI", "Unknown")
+        latitude = position_report.get("Latitude")
+        longitude = position_report.get("Longitude")
+        speed = position_report.get("Sog")
+        course = position_report.get("Cog")
+
+        event_buffer.append(data)
 
         print(
             f"Buffered event {len(event_buffer)}/{BUFFER_SIZE} | "
-            f"Type: {message_type} | Ship: {ship_name} | MMSI: {mmsi}"
+            f"Type: {message_type} | "
+            f"Ship: {ship_name} | "
+            f"MMSI: {mmsi} | "
+            f"Lat: {latitude} | "
+            f"Lon: {longitude} | "
+            f"SOG: {speed} | "
+            f"COG: {course}"
         )
 
         if len(event_buffer) >= BUFFER_SIZE:
