@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 from websocket import WebSocketApp
 
 
-# Load environment variables from .env
 load_dotenv()
 
 AIS_API_KEY = os.getenv("AIS_API_KEY")
@@ -21,77 +20,85 @@ if not S3_RAW_BUCKET:
     raise ValueError("S3_RAW_BUCKET not found in .env file")
 
 
-# Create S3 client
+BUFFER_SIZE = 100
+event_buffer = []
+
 s3_client = boto3.client("s3", region_name=AWS_REGION)
 
 
-# Bounding box for Strait of Hormuz
 SUBSCRIPTION_MESSAGE = {
     "APIKey": AIS_API_KEY,
     "BoundingBoxes": [
         [
-            [25.0, 55.0],
-            [28.5, 58.5]
+            [50.0, 22.0],
+            [60.0, 30.0]
         ]
-    ],
-    "FilterMessageTypes": ["PositionReport"]
+    ]
 }
 
 
 def build_s3_key(timestamp: datetime) -> str:
     return (
-        f"raw/ais/strait_of_hormuz/"
+        "raw/ais/strait_of_hormuz/"
         f"year={timestamp.year}/"
         f"month={timestamp.month:02}/"
         f"day={timestamp.day:02}/"
         f"hour={timestamp.hour:02}/"
-        f"ais_message_{timestamp.strftime('%Y%m%d_%H%M%S_%f')}.json"
+        f"batch_{timestamp.strftime('%Y%m%d_%H%M%S_%f')}.jsonl"
     )
 
 
-def upload_to_s3(data: dict) -> None:
+def flush_buffer_to_s3() -> None:
+    global event_buffer
+
+    if not event_buffer:
+        return
+
     timestamp = datetime.now(timezone.utc)
     s3_key = build_s3_key(timestamp)
+
+    jsonl_body = "\n".join(json.dumps(event) for event in event_buffer)
 
     s3_client.put_object(
         Bucket=S3_RAW_BUCKET,
         Key=s3_key,
-        Body=json.dumps(data),
+        Body=jsonl_body,
         ContentType="application/json"
     )
 
-    print(f"Uploaded to S3: s3://{S3_RAW_BUCKET}/{s3_key}")
+    print(f"Uploaded batch to S3: s3://{S3_RAW_BUCKET}/{s3_key}")
+    print(f"Batch size: {len(event_buffer)} events")
+
+    event_buffer = []
 
 
 def on_open(ws):
     print("Connected to AISStream")
+    print("Sending subscription message")
     ws.send(json.dumps(SUBSCRIPTION_MESSAGE))
     print("Subscription message sent")
 
 
 def on_message(ws, message):
+    global event_buffer
+
     try:
         data = json.loads(message)
+        event_buffer.append(data)
 
         metadata = data.get("MetaData", {})
-        position_report = data.get("Message", {}).get("PositionReport", {})
+        message_type = data.get("MessageType", "Unknown")
 
         ship_name = metadata.get("ShipName", "Unknown")
         mmsi = metadata.get("MMSI", "Unknown")
-        latitude = position_report.get("Latitude")
-        longitude = position_report.get("Longitude")
-        speed = position_report.get("Sog")
-        course = position_report.get("Cog")
 
-        print("=" * 60)
-        print(f"Ship: {ship_name}")
-        print(f"MMSI: {mmsi}")
-        print(f"Latitude: {latitude}")
-        print(f"Longitude: {longitude}")
-        print(f"Speed over ground: {speed}")
-        print(f"Course over ground: {course}")
+        print(
+            f"Buffered event {len(event_buffer)}/{BUFFER_SIZE} | "
+            f"Type: {message_type} | Ship: {ship_name} | MMSI: {mmsi}"
+        )
 
-        upload_to_s3(data)
+        if len(event_buffer) >= BUFFER_SIZE:
+            flush_buffer_to_s3()
 
     except Exception as error:
         print(f"Error processing AIS message: {error}")
@@ -105,6 +112,7 @@ def on_close(ws, close_status_code, close_msg):
     print("Connection closed")
     print(f"Status code: {close_status_code}")
     print(f"Message: {close_msg}")
+    flush_buffer_to_s3()
 
 
 def main():
@@ -116,7 +124,11 @@ def main():
         on_close=on_close
     )
 
-    websocket.run_forever()
+    try:
+        websocket.run_forever()
+    except KeyboardInterrupt:
+        print("Script stopped manually")
+        flush_buffer_to_s3()
 
 
 if __name__ == "__main__":
