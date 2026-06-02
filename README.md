@@ -1,271 +1,391 @@
-# AWS Real-Time Analytics Project
+# Real-Time Maritime Analytics Pipeline on AWS
 
 ## Project Overview
 
-This project is a real-time streaming analytics pipeline built on AWS.
+This project is a real-time maritime analytics platform built on AWS using live AIS (Automatic Identification System) vessel data.
 
-The system ingests live AIS vessel tracking data from the AISStream API, processes streaming events in real time, stores raw and transformed data in Amazon S3, and enables future analytics with services such as AWS Kinesis, Lambda, Athena, Glue, and QuickSight.
+The system ingests streaming ship position data, processes it in real time, stores raw events for archival purposes, and visualizes vessel activity through OpenSearch Dashboards.
 
-The goal of this project is to simulate a production-grade cloud-native real-time data engineering workflow focused on maritime traffic monitoring and analytics.
-
----
-
-## Architecture
-
-https://miro.com/app/board/uXjVHS6eY4g=/?moveToWidget=3458764673850213933&cot=14
-
-Planned AWS services used in this project:
-
-- Amazon Kinesis Data Streams
-- Managed Apache Flink
-- AWS OpenSearch
-- AWS Lambda
-- Amazon S3
-- AWS Glue
-- Amazon Athena
-- Amazon QuickSight
-- Amazon CloudWatch
-- AWS IAM
+The project initially started with an Apache Flink-based architecture but was later redesigned into a serverless event-driven architecture due to connector compatibility issues between Apache Flink and Amazon OpenSearch Service.
 
 ---
 
-## Use Case
+# Final Architecture
 
-This project focuses on ingesting and analyzing real-time AIS vessel tracking data.
+## Technologies Used
 
-Possible analytics scenarios include:
-
-- Monitoring vessel traffic in strategic maritime regions
-- Tracking oil tankers and cargo ships
-- Real-time event streaming and processing
-- Maritime traffic analytics
-- Latency and throughput monitoring
-
----
-
-## Project Structure
-
-```bash
-aws-real-time-analytics-project/
-│
-├── docs/
-├── infrastructure/
-├── monitoring/
-├── notebooks/
-├── scripts/
-├── src/
-│   ├── consumer/
-│   ├── producer/
-│   └── transformation/
-├── tests/
-│
-├── .env
-├── .gitignore
-├── requirements.txt
-└── README.md
-```
-## Streaming Optimization
-
-The initial ingestion pipeline stored every incoming AIS event as an individual JSON object in Amazon S3.
-
-During testing, this approach quickly generated thousands of very small files within a short period of time. This pattern can lead to several performance and scalability issues in cloud-based data lake architectures, including:
-
-* Increased S3 PUT request overhead
-* Poor Athena query performance
-* Higher metadata and crawler overhead
-* Small-files problem in distributed analytics systems
-
-To improve scalability and storage efficiency, the ingestion logic was redesigned to use buffered event batching.
-
-The updated ingestion pipeline now:
-
-* Buffers incoming AIS events in memory
-* Groups events into batches of 100 records
-* Stores batched data as JSONL files in Amazon S3
-* Uses time-based partitioning (`year/month/day/hour`)
-
-This design significantly reduces the number of S3 objects while improving downstream analytics performance and reducing operational overhead.
-
-The ingestion pipeline now behaves more closely to a production-grade real-time streaming architecture.
-
-# Project Update – Real-Time AIS Streaming Pipeline with AWS
-
-## Progress Overview
-
-Today, the real-time AIS streaming pipeline was significantly extended and connected across multiple AWS services.
-
-The project now supports:
-
-* Real-time AIS vessel data ingestion
-* Streaming through Amazon Kinesis Data Streams
-* Raw data archiving in Amazon S3
-* Real-time stream processing with Managed Apache Flink
-* Interactive SQL analysis using Apache Zeppelin
-* Initial architecture documentation
-
----
-
-# Implemented Components
-
-## 1. Amazon Kinesis Data Streams
-
-Created and configured a Kinesis Data Stream to receive real-time AIS vessel events from the local Python client.
-
-The AIS data is continuously streamed into AWS in JSON format.
-
----
-
-## 2. AWS Lambda Consumer
-
-Created a Lambda consumer function connected to the Kinesis Data Stream.
-
-### Implemented:
-
-* Lambda trigger configuration
-* IAM permissions and policies
-* Access from Lambda to:
-
-  * Kinesis Data Streams
-  * Amazon S3
-
-The Lambda function stores incoming raw AIS events inside an S3 raw bucket for long-term archival purposes.
-
----
-
-## 3. Amazon S3 Raw Storage
-
-Created an S3 bucket for raw event storage.
-
-Purpose:
-
-* Long-term archival
-* Future batch analytics
-* Backup and replay capabilities
-
-This establishes a cold-storage layer for the streaming architecture.
-
----
-
-## 4. Python AIS Streaming Client
-
-Extended the local Python client responsible for consuming AIS data from the external AIS source.
-
-### Updates:
-
-* Added Kinesis integration
-* Updated `.env` configuration
-* Added:
-
-  * `KINESIS_STREAM_NAME`
-* Configured AWS credentials and environment variables
-
-The client now pushes live AIS events directly into Kinesis.
-
----
-
-## 5. Managed Apache Flink
-
-Created:
-
-* Managed Apache Flink application
-* Zeppelin notebook environment
-
-Apache Zeppelin was used for interactive stream processing and SQL experimentation.
-
----
-
-# Apache Zeppelin & Flink SQL
-
-## Initial Flink Interpreter Test
-
-Executed the following command to validate the Flink interpreter:
-
-```sql
-%flink.ssql(type=update)
-SHOW TABLES;
-```
-
-Important:
-The Python AIS streaming script was intentionally NOT running during the initial setup and validation phase.
-
----
-
-## Kinesis Stream Registration
-
-The Kinesis Data Stream was registered and connected to Flink using SQL DDL statements.
-
-After the successful table registration:
-
-* the Python AIS script was started
-* real-time vessel data immediately appeared inside Zeppelin
-
-This confirmed the successful end-to-end streaming integration.
-
----
-
-# Real-Time Stream Analytics
-
-Using Flink SQL, live AIS vessel data could be queried and visualized directly inside Zeppelin.
-
-The most important query included:
-
-* Latitude
-* Longitude
-* Vessel speed
-* Vessel names
-
-This enabled:
-
-* table visualizations
-* scatter plots
-* real-time vessel monitoring
-
-```
-%flink.ssql(type=update)
-
-SELECT
-  CAST(JSON_VALUE(raw_data, '$.Message.PositionReport.Longitude') AS DOUBLE) AS lon,
-
-  CAST(JSON_VALUE(raw_data, '$.Message.PositionReport.Latitude') AS DOUBLE) AS lat,
-
-  JSON_VALUE(raw_data, '$.MetaData.ShipName') AS ship_name,
-
-  CAST(JSON_VALUE(raw_data, '$.Message.PositionReport.Sog') AS DOUBLE) AS speed_knots
-
-FROM ais_stream;
-```
-
----
-
-# Architecture Progress
-
-An AWS architecture diagram was created to visualize the pipeline components and data flow.
-
-Current architecture includes:
-https://miro.com/app/board/uXjVHS6eY4g=/?moveToWidget=3458764673850213933&cot=14
-
-* AIS Source
-* Local Python Client
-* Amazon Kinesis Data Streams
+* Python
 * AWS Lambda
+* Amazon Kinesis Data Streams
+* Amazon SQS
+* Amazon Kinesis Firehose
+* Amazon OpenSearch Service
+* OpenSearch Dashboards
 * Amazon S3
-* Managed Apache Flink
-* Apache Zeppelin
-* Amazon OpenSearch (planned)
 * IAM
 
+https://miro.com/app/board/uXjVHS6eY4g=/?moveToWidget=3458764674099465189&cot=14
 ---
 
-# Current Pipeline
+# Final Data Flow
 
 ```text
-AIS Source
-   ↓
-Local Python Client
-   ↓
-Amazon Kinesis Data Streams
-   ├── AWS Lambda → S3 Raw Bucket
-   └── Managed Apache Flink → Zeppelin Analytics
+AIS API
+→ Local Python Producer
+→ Amazon Kinesis Data Streams
+→ Lambda Consumer Function
+→ Amazon S3 Raw Archive
+→ Amazon SQS
+→ Lambda SQS-to-Firehose Function
+→ Amazon Kinesis Firehose
+→ Amazon OpenSearch Service
+→ OpenSearch Dashboards
 ```
 
 ---
+
+# Initial Apache Flink Architecture
+
+The project originally used the following architecture:
+
+https://miro.com/app/board/uXjVHS6eY4g=/?moveToWidget=3458764673850213933&cot=14
+
+```text
+AIS API
+→ Python Producer
+→ Kinesis Data Streams
+→ Apache Flink SQL (Apache Zeppelin)
+→ OpenSearch Sink
+→ OpenSearch Dashboards
+```
+
+The goal was to process and transform the incoming AIS stream using Apache Flink SQL before writing the transformed stream into OpenSearch.
+
+---
+
+# Apache Flink / OpenSearch Connector Problem
+
+During implementation, a major compatibility issue occurred between Apache Flink and Amazon OpenSearch Service.
+
+The OpenSearch sink connector relied on Elasticsearch 7 libraries and JAR files, which turned out to be incompatible with the OpenSearch version used in this project.
+
+This resulted in:
+
+* unstable sink behavior
+* failed writes to OpenSearch
+* connector interruptions
+* compatibility problems inside the Zeppelin interpreter environment
+
+After extensive troubleshooting, it became clear that the issue was caused by connector and JAR incompatibilities rather than by the SQL logic itself.
+
+Because of this limitation, the architecture was redesigned into a fully serverless AWS-native event-driven pipeline using Lambda, SQS, Firehose, and OpenSearch.
+
+---
+
+# OpenSearch Setup
+
+## Creating the OpenSearch Domain
+
+An OpenSearch domain was created in AWS.
+
+After the domain status became active, the OpenSearch Dashboard endpoint became available.
+
+Initially, access to OpenSearch Dashboards was blocked because the domain access policy denied access.
+
+The issue was solved by modifying the access policy from:
+
+```json
+"Deny"
+```
+
+to:
+
+```json
+"Allow"
+```
+
+This enabled dashboard access.
+
+---
+
+# OpenSearch Index Creation
+
+Inside OpenSearch Dashboards:
+
+```text
+Index Management
+→ Indexes
+→ Create Index
+```
+
+A custom index mapping JSON was created in order to define:
+
+* field types
+* geo_point fields
+* timestamps
+* numeric fields
+* aggregatable keyword fields
+
+The mapping defined how incoming AIS data would be stored and indexed.
+
+---
+
+# Apache Zeppelin Setup
+
+An Apache Zeppelin notebook was created for Flink SQL processing.
+
+Inside Zeppelin:
+
+* a Studio notebook was created
+* Apache Zeppelin paragraphs were added
+* Flink SQL commands were executed
+* test sinks and parsing tables were created
+
+The raw AIS stream first needed to be parsed and transformed before writing to the final vessel sink.
+
+---
+
+# Migration to Serverless Architecture
+
+After the Flink connector issues, the architecture was redesigned.
+
+The final architecture introduced:
+
+* Amazon SQS
+* two AWS Lambda functions
+* Amazon Kinesis Firehose
+* OpenSearch integration
+
+---
+
+# SQS Integration
+
+An Amazon SQS queue was created.
+
+The Lambda environment variables were updated to include:
+
+* SQS queue URL
+* queue configuration values
+
+The Lambda Python code was modified to publish messages into SQS.
+
+After code changes, the Lambda function was redeployed.
+
+---
+
+# Firehose Integration
+
+Amazon Kinesis Firehose was configured with:
+
+## Source
+
+```text
+Direct PUT
+```
+
+## Destination
+
+```text
+Amazon OpenSearch Service
+```
+
+The following values had to be configured:
+
+* existing OpenSearch domain
+* target OpenSearch index
+* S3 backup bucket
+
+---
+
+# S3 Backup Configuration
+
+During Firehose setup, S3 prefixes were configured in order to keep backup files organized.
+
+Without prefixes, all files would have been stored in the root bucket structure.
+
+The existing raw archive bucket structure was reused.
+
+---
+
+# IAM Permissions
+
+Additional IAM permissions were required for:
+
+* Lambda
+* SQS
+* Firehose
+* OpenSearch access
+
+A second Lambda function was created because SQS cannot write directly into Firehose.
+
+The second Lambda function:
+
+* consumed SQS messages
+* transformed records
+* sent records into Firehose
+
+---
+
+# OpenSearch Security Role Mapping
+
+Initially, Firehose was unable to write into OpenSearch.
+
+The issue was caused by missing OpenSearch write permissions.
+
+The fix was applied inside OpenSearch Security configuration:
+
+```text
+Security
+→ Roles
+→ all_access
+→ Map Users
+```
+
+The Firehose service role ARN was added to backend roles.
+
+After this change:
+
+* Firehose successfully indexed documents
+* OpenSearch document counts started increasing in real time
+
+---
+
+# Geo Mapping Issue
+
+The first Geo Map visualization did not work because a combined geo_point field did not exist.
+
+To solve this:
+
+* the second Lambda function was modified
+* a combined geo field was generated
+* the Lambda function was redeployed
+
+A new OpenSearch index and a new index pattern had to be created afterward.
+
+Important:
+Whenever the document structure changes inside the Lambda transformation logic, a new index should be created.
+
+Additionally:
+The Firehose destination index also needs to be updated whenever a new OpenSearch index is created.
+
+Example:
+
+```text
+Old index:
+ais-index-vessel-data-v1
+
+New index:
+ais-index-vessel-data-v2
+```
+
+The Firehose configuration must point to the new index.
+
+---
+
+# Dynamic AIS Regions
+
+The AIS producer script uses configurable bounding boxes.
+
+This allows switching between maritime regions by simply changing coordinates inside the producer script.
+
+Examples:
+
+* Baltic Sea
+* Mediterranean Sea
+* Persian Gulf
+* Strait of Hormuz
+
+No architecture changes are required when changing regions.
+
+---
+
+# OpenSearch Visualizations
+
+Several real-time visualizations were created in OpenSearch Dashboards:
+
+## Geo Map
+
+Real-time ship locations displayed on a map.
+
+## Total Active Vessels KPI
+
+Unique vessel count using:
+
+```text
+Unique Count(ship_name)
+```
+
+## Total AIS Messages KPI
+
+Real-time message ingestion count.
+
+## Top Vessel Speed
+
+Bar chart showing vessels with highest speed.
+
+## Messages Per Minute
+
+Line chart visualizing ingestion activity over time.
+
+## Traffic Monitoring
+
+Real-time monitoring of vessel density and maritime traffic spikes.
+
+---
+
+# MMSI vs Ship Name
+
+Two identifiers were used:
+
+## MMSI
+
+Maritime Mobile Service Identity
+
+A unique numeric identifier assigned to a vessel transponder.
+
+## Ship Name
+
+Human-readable vessel name.
+
+Difference:
+
+* MMSI is technically unique
+* ship names are not guaranteed to be unique globally
+
+Because of this:
+
+* MMSI is more reliable for technical tracking
+* ship_name is better for dashboard readability
+
+---
+
+# Lessons Learned
+
+This project provided hands-on experience with:
+
+* real-time streaming architectures
+* event-driven AWS systems
+* OpenSearch indexing
+* geospatial analytics
+* IAM permissions
+* streaming transformations
+* troubleshooting connector compatibility issues
+* serverless architecture redesign
+
+One of the biggest lessons learned was that architectural flexibility and troubleshooting are essential when building real-world data engineering systems.
+
+---
+
+# Future Improvements
+
+Potential future improvements include:
+
+* anomaly detection
+* vessel type classification
+* alerting systems
+* historical analytics
+* Athena integration
+* Grafana dashboards
+* Dockerized deployment
+* CI/CD pipelines
+* machine learning for maritime traffic prediction
