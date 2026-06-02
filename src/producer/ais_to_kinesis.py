@@ -23,8 +23,8 @@ SUBSCRIPTION_MESSAGE = {
     "APIKey": AIS_API_KEY,
     "BoundingBoxes": [
         [
-            [50.0, 22.0],
-            [60.0, 30.0]
+            [29.0, 28.0],
+            [37.0, 36.0]
         ]
     ],
     "FilterMessageTypes": ["PositionReport"]
