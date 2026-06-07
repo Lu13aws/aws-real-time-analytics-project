@@ -132,7 +132,7 @@ Firehose was configured with:
 |---|---|
 | Source | Direct PUT |
 | Destination | Amazon OpenSearch Service |
-| Index | `ais-index-vessel-data-v2` |
+| Index | `ais-index-vessel-data-v3` |
 | S3 backup | Existing raw archive bucket with prefix |
 
 ### OpenSearch Security Role Mapping
