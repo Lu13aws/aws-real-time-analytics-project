@@ -1,35 +1,67 @@
 # Real-Time Maritime Analytics Pipeline on AWS
 
-## Project Overview
+## Project Description
 
-This project is a real-time maritime analytics platform built on AWS using live AIS (Automatic Identification System) vessel data.
+Real-time maritime analytics platform built on AWS using live AIS (Automatic Identification System) vessel data. The system ingests streaming ship position data through a serverless event-driven pipeline, stores raw events in S3 for archival, and visualizes vessel activity in real time through OpenSearch Dashboards.
 
-The system ingests streaming ship position data, processes it in real time, stores raw events for archival purposes, and visualizes vessel activity through OpenSearch Dashboards.
-
-The project initially started with an Apache Flink-based architecture but was later redesigned into a serverless event-driven architecture due to connector compatibility issues between Apache Flink and Amazon OpenSearch Service.
+The project started with an Apache Flink-based architecture and was later redesigned into a fully serverless pipeline after hitting a critical connector incompatibility between Flink and Amazon OpenSearch Service.
 
 ---
 
-# Final Architecture
+## Project Structure
 
-## Technologies Used
+```
+aws-real-time-analytics-project/
+├── src/
+│   ├── producer/           # AIS WebSocket producer scripts
+│   │   ├── ais_to_kinesis.py       # Stateless real-time Kinesis producer (v1)
+│   │   └── ingest_ais_data.py      # Buffered S3 archival producer (v2)
+│   ├── consumer/           # Lambda consumer code (deployed in AWS console)
+│   └── transformation/     # Transformation logic (deployed in AWS console)
+├── skills/                 # Reusable skill documentation extracted from this project
+│   ├── opensearch_setup_config/
+│   ├── aws_streaming_stack/
+│   ├── opensearch_dashboards/
+│   ├── timeseries_analytics/
+│   ├── data_ingestion/
+│   └── documentation_patterns/
+├── data/
+│   └── screenshots/        # Dashboard and configuration screenshots
+├── infrastructure/
+│   ├── cloudformation/     # Placeholder — not yet implemented
+│   └── terraform/          # Placeholder — not yet implemented
+├── notebooks/              # Placeholder — Jupyter notebooks for historical analysis
+├── .env                    # Local secrets (gitignored)
+├── .gitignore
+├── requirements.txt
+└── README.md
+```
 
-* Python
-* AWS Lambda
-* Amazon Kinesis Data Streams
-* Amazon SQS
-* Amazon Kinesis Firehose
-* Amazon OpenSearch Service
-* OpenSearch Dashboards
-* Amazon S3
-* IAM
-
-https://miro.com/app/board/uXjVHS6eY4g=/?moveToWidget=3458764674099465189&cot=14
 ---
 
-# Final Data Flow
+## Final Architecture
 
-```text
+### Technologies Used
+
+| Layer | Technology |
+|---|---|
+| Language | Python 3.x |
+| Streaming bus | Amazon Kinesis Data Streams |
+| Compute | AWS Lambda (×2) |
+| Queueing | Amazon SQS |
+| Managed delivery | Amazon Kinesis Firehose |
+| Storage | Amazon S3 |
+| Search & analytics | Amazon OpenSearch Service |
+| Visualization | OpenSearch Dashboards |
+| Access control | AWS IAM |
+
+Architecture diagram: https://miro.com/app/board/uXjVHS6eY4g=/?moveToWidget=3458764674099465189&cot=14
+
+---
+
+## Final Data Flow
+
+```
 AIS API
 → Local Python Producer
 → Amazon Kinesis Data Streams
@@ -44,13 +76,9 @@ AIS API
 
 ---
 
-# Initial Apache Flink Architecture
+## Initial Architecture
 
-The project originally used the following architecture:
-
-https://miro.com/app/board/uXjVHS6eY4g=/?moveToWidget=3458764673850213933&cot=14
-
-```text
+```
 AIS API
 → Python Producer
 → Kinesis Data Streams
@@ -59,333 +87,276 @@ AIS API
 → OpenSearch Dashboards
 ```
 
-The goal was to process and transform the incoming AIS stream using Apache Flink SQL before writing the transformed stream into OpenSearch.
+**Goal:** Process and transform the incoming AIS stream using Apache Flink SQL before writing the results into OpenSearch.
+
+Architecture diagram: https://miro.com/app/board/uXjVHS6eY4g=/?moveToWidget=3458764673850213933&cot=14
+
+**Why it failed:**
+The OpenSearch sink connector depended on Elasticsearch 7 JARs, which were incompatible with the AWS OpenSearch version used in this project. This caused unstable sink behavior, failed writes, and connector interruptions inside the Zeppelin interpreter. After extensive troubleshooting it became clear the issue was at the connector level, not the SQL logic.
+
+**Decision:** Abandon Flink and redesign as a fully serverless AWS-native pipeline using Lambda, SQS, Firehose, and OpenSearch.
 
 ---
 
-# Apache Flink / OpenSearch Connector Problem
+## Service Setup
 
-During implementation, a major compatibility issue occurred between Apache Flink and Amazon OpenSearch Service.
+### OpenSearch Domain
 
-The OpenSearch sink connector relied on Elasticsearch 7 libraries and JAR files, which turned out to be incompatible with the OpenSearch version used in this project.
+An OpenSearch domain was created in AWS. After the domain status became Active, the Dashboard endpoint became available.
 
-This resulted in:
+The default access policy was set to `"Deny"`, blocking all Dashboard access. Fixed by changing the policy to `"Allow"`:
 
-* unstable sink behavior
-* failed writes to OpenSearch
-* connector interruptions
-* compatibility problems inside the Zeppelin interpreter environment
-
-After extensive troubleshooting, it became clear that the issue was caused by connector and JAR incompatibilities rather than by the SQL logic itself.
-
-Because of this limitation, the architecture was redesigned into a fully serverless AWS-native event-driven pipeline using Lambda, SQS, Firehose, and OpenSearch.
-
----
-
-# OpenSearch Setup
-
-## Creating the OpenSearch Domain
-
-An OpenSearch domain was created in AWS.
-
-After the domain status became active, the OpenSearch Dashboard endpoint became available.
-
-Initially, access to OpenSearch Dashboards was blocked because the domain access policy denied access.
-
-The issue was solved by modifying the access policy from:
-
-```json
-"Deny"
+```
+AWS Console → OpenSearch Service → domain → Actions → Edit security configuration
 ```
 
-to:
+### OpenSearch Index
 
-```json
-"Allow"
+A custom index mapping JSON was created inside Dashboards to define field types before data arrived:
+
+```
+Index Management → Indexes → Create Index
 ```
 
-This enabled dashboard access.
+Fields mapped: `geo_point`, `date`, `keyword` (aggregatable identifiers), `float` (metrics).
 
----
+### SQS Queue
 
-# OpenSearch Index Creation
+An SQS queue was created. The first Lambda function's environment variables were updated with the queue URL and the function was redeployed to publish messages into SQS.
 
-Inside OpenSearch Dashboards:
+### Kinesis Firehose
 
-```text
-Index Management
-→ Indexes
-→ Create Index
+Firehose was configured with:
+
+| Setting | Value |
+|---|---|
+| Source | Direct PUT |
+| Destination | Amazon OpenSearch Service |
+| Index | `ais-index-vessel-data-v2` |
+| S3 backup | Existing raw archive bucket with prefix |
+
+### OpenSearch Security Role Mapping
+
+Firehose could not write to OpenSearch until the Firehose service role ARN was added to OpenSearch backend roles:
+
+```
+OpenSearch Dashboards → Security → Roles → all_access → Map Users → Backend roles
 ```
 
-A custom index mapping JSON was created in order to define:
+### Apache Zeppelin (abandoned)
 
-* field types
-* geo_point fields
-* timestamps
-* numeric fields
-* aggregatable keyword fields
-
-The mapping defined how incoming AIS data would be stored and indexed.
+A Zeppelin Studio notebook was created for Flink SQL processing. Test sinks and parsing tables were created. This setup was abandoned after the Flink/OpenSearch connector issue was identified.
 
 ---
 
-# Apache Zeppelin Setup
+## Environment Setup
 
-An Apache Zeppelin notebook was created for Flink SQL processing.
+### Required environment variables (`.env`)
 
-Inside Zeppelin:
-
-* a Studio notebook was created
-* Apache Zeppelin paragraphs were added
-* Flink SQL commands were executed
-* test sinks and parsing tables were created
-
-The raw AIS stream first needed to be parsed and transformed before writing to the final vessel sink.
-
----
-
-# Migration to Serverless Architecture
-
-After the Flink connector issues, the architecture was redesigned.
-
-The final architecture introduced:
-
-* Amazon SQS
-* two AWS Lambda functions
-* Amazon Kinesis Firehose
-* OpenSearch integration
-
----
-
-# SQS Integration
-
-An Amazon SQS queue was created.
-
-The Lambda environment variables were updated to include:
-
-* SQS queue URL
-* queue configuration values
-
-The Lambda Python code was modified to publish messages into SQS.
-
-After code changes, the Lambda function was redeployed.
-
----
-
-# Firehose Integration
-
-Amazon Kinesis Firehose was configured with:
-
-## Source
-
-```text
-Direct PUT
+```
+AIS_API_KEY=            # AISStream.io API key
+S3_RAW_BUCKET=          # S3 bucket name for raw JSONL archive
+AWS_REGION=             # AWS region (default: eu-central-1)
+KINESIS_STREAM_NAME=    # Kinesis stream name (default: ais-stream-v1)
 ```
 
-## Destination
+### Install dependencies
 
-```text
-Amazon OpenSearch Service
+```bash
+python -m venv venv
+source venv/bin/activate        # Windows: venv\Scripts\activate
+pip install -r requirements.txt
 ```
 
-The following values had to be configured:
+### Run the producers
 
-* existing OpenSearch domain
-* target OpenSearch index
-* S3 backup bucket
+```bash
+# Buffered S3 archival producer (recommended for raw data storage)
+python src/producer/ingest_ais_data.py
 
----
-
-# S3 Backup Configuration
-
-During Firehose setup, S3 prefixes were configured in order to keep backup files organized.
-
-Without prefixes, all files would have been stored in the root bucket structure.
-
-The existing raw archive bucket structure was reused.
-
----
-
-# IAM Permissions
-
-Additional IAM permissions were required for:
-
-* Lambda
-* SQS
-* Firehose
-* OpenSearch access
-
-A second Lambda function was created because SQS cannot write directly into Firehose.
-
-The second Lambda function:
-
-* consumed SQS messages
-* transformed records
-* sent records into Firehose
-
----
-
-# OpenSearch Security Role Mapping
-
-Initially, Firehose was unable to write into OpenSearch.
-
-The issue was caused by missing OpenSearch write permissions.
-
-The fix was applied inside OpenSearch Security configuration:
-
-```text
-Security
-→ Roles
-→ all_access
-→ Map Users
+# Stateless real-time Kinesis streaming producer
+python src/producer/ais_to_kinesis.py
 ```
 
-The Firehose service role ARN was added to backend roles.
-
-After this change:
-
-* Firehose successfully indexed documents
-* OpenSearch document counts started increasing in real time
+Stop with `Ctrl+C` — the buffered producer flushes remaining events to S3 on exit.
 
 ---
 
-# Geo Mapping Issue
+## Data Source
 
-The first Geo Map visualization did not work because a combined geo_point field did not exist.
+| Property | Value |
+|---|---|
+| Source | AISStream.io |
+| Protocol | WebSocket (`wss://stream.aisstream.io/v0/stream`) |
+| Coverage | Global maritime AIS — project focused on Persian Gulf, Strait of Hormuz, Baltic Sea |
+| Update frequency | Real-time continuous stream |
+| Message filter | `PositionReport` messages only |
 
-To solve this:
+### Key fields
 
-* the second Lambda function was modified
-* a combined geo field was generated
-* the Lambda function was redeployed
+| Field | Description |
+|---|---|
+| `MMSI` | Maritime Mobile Service Identity — unique numeric vessel transponder ID |
+| `ShipName` | Human-readable vessel name (not globally unique) |
+| `Latitude` / `Longitude` | Decimal degree position |
+| `Sog` | Speed Over Ground (knots) |
+| `Cog` | Course Over Ground (degrees true) |
 
-A new OpenSearch index and a new index pattern had to be created afterward.
+### Geographic region switching
 
-Important:
-Whenever the document structure changes inside the Lambda transformation logic, a new index should be created.
+Bounding boxes are the only thing that changes when switching regions — no infrastructure changes required:
 
-Additionally:
-The Firehose destination index also needs to be updated whenever a new OpenSearch index is created.
+| Region | BoundingBox |
+|---|---|
+| Persian Gulf | `[[29, 28], [37, 36]]` |
+| Strait of Hormuz | `[[50, 22], [60, 30]]` |
+| Baltic Sea | `[[50, 22], [60, 30]]` |
+| Mediterranean | `[[30, -6], [46, 36]]` |
 
-Example:
+---
 
-```text
-Old index:
-ais-index-vessel-data-v1
+## AWS Budget
 
-New index:
-ais-index-vessel-data-v2
+Monthly budget cap: *(set a cap in AWS Billing → Budgets to prevent surprises)*
+
+Primary cost drivers: Kinesis shard hours, Lambda invocations, OpenSearch instance hours, S3 storage.
+
+---
+
+## Challenges & Fixes
+
+### Apache Flink / OpenSearch Connector Incompatibility
+
+**Symptom:** Flink SQL jobs ran without errors but no documents appeared in OpenSearch. Connector behavior was unstable and intermittent inside the Zeppelin interpreter.
+
+**Root cause:** The Flink OpenSearch sink connector used Elasticsearch 7 JARs, which were incompatible with the AWS OpenSearch version deployed in this project.
+
+**Fix:** Abandoned Flink entirely. Redesigned the pipeline as Lambda → SQS → Firehose → OpenSearch. This removed the incompatible connector and replaced it with AWS-managed delivery.
+
+---
+
+### OpenSearch Dashboards Access Blocked
+
+**Symptom:** Navigating to the OpenSearch Dashboard URL returned an access denied error immediately after domain creation.
+
+**Root cause:** The default domain access policy is set to `"Deny"` for all principals.
+
+**Fix:**
+```
+AWS Console → OpenSearch Service → domain → Actions → Edit security configuration
+→ Change access policy from "Deny" to "Allow"
 ```
 
-The Firehose configuration must point to the new index.
-
 ---
 
-# Dynamic AIS Regions
+### Geo Map Visualization Blank
 
-The AIS producer script uses configurable bounding boxes.
+**Symptom:** The Geo Map panel in OpenSearch Dashboards displayed no data points despite records being indexed successfully.
 
-This allows switching between maritime regions by simply changing coordinates inside the producer script.
+**Root cause:** OpenSearch Geo Map requires a `geo_point` typed field. Latitude and longitude were stored as separate `float` fields, which are not recognized for geo aggregations.
 
-Examples:
+**Fix:** Modified Lambda Function 2 to compute and emit a combined geo field before sending to Firehose:
 
-* Baltic Sea
-* Mediterranean Sea
-* Persian Gulf
-* Strait of Hormuz
-
-No architecture changes are required when changing regions.
-
----
-
-# OpenSearch Visualizations
-
-Several real-time visualizations were created in OpenSearch Dashboards:
-
-## Geo Map
-
-Real-time ship locations displayed on a map.
-
-## Total Active Vessels KPI
-
-Unique vessel count using:
-
-```text
-Unique Count(ship_name)
+```python
+record["geo"] = {"lat": record["latitude"], "lon": record["longitude"]}
 ```
 
-## Total AIS Messages KPI
-
-Real-time message ingestion count.
-
-## Top Vessel Speed
-
-Bar chart showing vessels with highest speed.
-
-## Messages Per Minute
-
-Line chart visualizing ingestion activity over time.
-
-## Traffic Monitoring
-
-Real-time monitoring of vessel density and maritime traffic spikes.
+Created a new index with `geo_point` mapping (`ais-index-vessel-data-v2`) and a new Dashboards index pattern. Updated the Firehose destination to point to the new index.
 
 ---
 
-# MMSI vs Ship Name
+### Firehose Could Not Write to OpenSearch
 
-Two identifiers were used:
+**Symptom:** Firehose delivery stream showed success status, but OpenSearch document counts did not increase.
 
-## MMSI
+**Root cause:** The Firehose service role had no write permission to the OpenSearch domain. The domain accepted the connection but silently rejected the write operation.
 
-Maritime Mobile Service Identity
-
-A unique numeric identifier assigned to a vessel transponder.
-
-## Ship Name
-
-Human-readable vessel name.
-
-Difference:
-
-* MMSI is technically unique
-* ship names are not guaranteed to be unique globally
-
-Because of this:
-
-* MMSI is more reliable for technical tracking
-* ship_name is better for dashboard readability
+**Fix:**
+```
+OpenSearch Dashboards → Security → Roles → all_access → Map Users → Backend roles
+→ Add the Firehose service role ARN
+```
 
 ---
 
-# Lessons Learned
+### SQS Cannot Write to Firehose Directly
 
-This project provided hands-on experience with:
+**Symptom:** No native SQS → Firehose integration available in AWS.
 
-* real-time streaming architectures
-* event-driven AWS systems
-* OpenSearch indexing
-* geospatial analytics
-* IAM permissions
-* streaming transformations
-* troubleshooting connector compatibility issues
-* serverless architecture redesign
+**Root cause:** AWS does not support SQS as a direct Firehose source. SQS and Firehose cannot be wired together without compute in between.
 
-One of the biggest lessons learned was that architectural flexibility and troubleshooting are essential when building real-world data engineering systems.
+**Fix:** Created Lambda Function 2 as a bridge — triggered by SQS, it transforms records and calls `firehose.put_record()`. This also provided a natural place to add the `geo_point` enrichment step.
 
 ---
 
-# Future Improvements
+## Lessons Learned
 
-Potential future improvements include:
+- Flink's OpenSearch sink connector uses Elasticsearch 7 JARs — incompatible with AWS OpenSearch; avoid this path unless using a custom connector
+- OpenSearch `geo_point` fields must be a combined `{"lat": x, "lon": y}` object — separate float fields do not work for Geo Map visualizations
+- SQS cannot write to Firehose directly; a Lambda bridge is always required
+- IAM role mapping inside OpenSearch (Security → backend roles) is separate from AWS IAM policies — this is easy to miss and causes silent write failures
+- OpenSearch access policy defaults to Deny — change it immediately after domain creation
+- Any document structure change requires a new index version plus updates to Firehose destination and Dashboards index pattern
+- MMSI is technically unique per transponder; ship names are not globally unique — use MMSI for tracking logic, ship name for display
+- Architectural flexibility is essential: the Flink pivot added time but resulted in a simpler, more maintainable system
 
-* anomaly detection
-* vessel type classification
-* alerting systems
-* historical analytics
-* Athena integration
-* Grafana dashboards
-* Dockerized deployment
-* CI/CD pipelines
-* machine learning for maritime traffic prediction
+---
+
+## Future Improvements
+
+### Analytics Enhancements
+- Anomaly detection for vessels deviating from expected routes
+- Vessel type classification (cargo, tanker, fishing, passenger)
+- Zone-based alerting (vessel enters restricted or monitored area)
+- Traffic density heatmaps by time of day
+
+### Historical Analytics
+- Athena integration for SQL queries over the S3 raw JSONL archive
+- Glue Data Catalog for automatic partition discovery
+- Historical route reconstruction per vessel
+
+### Infrastructure
+- CloudFormation or Terraform templates for all manually created resources
+- Dockerized producer deployment for portability
+- CI/CD pipeline for Lambda function deployments
+
+### Visualization
+- Grafana dashboards as an alternative to OpenSearch Dashboards
+- Vessel speed and heading overlays on the Geo Map
+
+### ML Extensions
+- Route prediction using historical AIS traces
+- Maritime traffic forecasting by region and time window
+
+---
+
+## Project Progress
+
+### 20260531
+
+- Set up AISStream.io account and obtained API key
+- Created `ais_to_kinesis.py` — initial WebSocket producer writing to Kinesis
+- Created Kinesis Data Stream `ais-stream-v1` in `eu-central-1`
+- Created OpenSearch domain; resolved Dashboard access (Deny → Allow policy)
+- Created Lambda Consumer Function with Kinesis trigger
+- Initial Flink/Zeppelin setup attempted for stream processing
+
+### 20260601
+
+- Identified Flink/OpenSearch connector JAR incompatibility after extensive troubleshooting
+- Decided to pivot to serverless Lambda/SQS/Firehose architecture
+- Created SQS queue; updated Lambda Function 1 to publish to SQS
+- Created Kinesis Firehose with Direct PUT → OpenSearch destination
+- Created Lambda Function 2 (SQS → Firehose bridge)
+- Resolved Firehose write permission by mapping service role ARN to OpenSearch `all_access` backend role
+
+### 20260602
+
+- Identified blank Geo Map issue — missing `geo_point` field
+- Modified Lambda Function 2 to emit combined `geo` field
+- Created `ais-index-vessel-data-v2` with `geo_point` mapping
+- Updated Firehose destination to new index
+- Geo Map rendering confirmed with live vessel data
+- Built full OpenSearch Dashboard: Geo Map, KPI cards, speed bar chart, messages-per-minute line chart
+- Changed bounding boxes from Persian Gulf to Strait of Hormuz region
+- Created `ingest_ais_data.py` — buffered S3 archival producer with Hive-style time partitioning
